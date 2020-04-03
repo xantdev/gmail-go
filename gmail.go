@@ -25,13 +25,13 @@ type GoogleMessage struct {
 	Header textproto.MIMEHeader   // headers
 	parts  map[string]*googlePart // the list of file by names
 
-	Token string
+	AccessToken string
 }
 
 // Token - implement TokenSource interface
 func (m *GoogleMessage) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{
-		AccessToken: m.token,
+		AccessToken: m.AccessToken,
 	}, nil
 }
 
@@ -109,7 +109,7 @@ func (m *GoogleMessage) writeTo(w io.Writer) error {
 	headers.Set("MIME-Version", "1.0")
 
 	// copy the primary header of the message
-	for k, v := range m.header {
+	for k, v := range m.Header {
 		for _, v2 := range v {
 			headers.Add(k, v2)
 		}
