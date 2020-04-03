@@ -22,10 +22,10 @@ import (
 
 // GoogleMessage describes an email message.
 type GoogleMessage struct {
-	header textproto.MIMEHeader   // headers
+	Header textproto.MIMEHeader   // headers
 	parts  map[string]*googlePart // the list of file by names
 
-	token string
+	Token string
 }
 
 // Token - implement TokenSource interface
