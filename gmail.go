@@ -153,6 +153,7 @@ func (m *GoogleMessage) writeTo(w io.Writer) error {
 }
 
 // Send sends the message through GMail.
+// Returns the Message-Id header for the sent email
 func (m *GoogleMessage) Send() (string, error) {
 	var buf bytes.Buffer
 	m.writeTo(&buf)
