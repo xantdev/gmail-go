@@ -162,7 +162,7 @@ func (m *GoogleMessage) Send() (string, error) {
 
 	var gmailMessage = &gmail.Message{Raw: body}
 
-	srv, err := gmail.NewService(context.Background(), option.WithTokenSource(m), option.WithUserAgent("XANT"))
+	srv, err := gmail.NewService(context.Background(), option.WithTokenSource(m), option.WithUserAgent("XANTDev/gmail-go"))
 
 	resp, err := srv.Users.Messages.Send("me", gmailMessage).Do()
 	if err != nil {
