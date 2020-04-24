@@ -99,8 +99,8 @@ func (m *GoogleMessage) Has(name string) bool {
 	return ok
 }
 
-// writeTo generates and writes the text representation of mail messages.
-func (m *GoogleMessage) writeTo(w io.Writer) error {
+// WriteTo generates and writes the text representation of mail messages.
+func (m *GoogleMessage) WriteTo(w io.Writer) error {
 	if len(m.parts) == 0 {
 		return errors.New("contents are undefined")
 	}
@@ -156,10 +156,9 @@ func (m *GoogleMessage) writeTo(w io.Writer) error {
 // Returns the Message-Id header for the sent email
 func (m *GoogleMessage) Send() (string, error) {
 	var buf bytes.Buffer
-	m.writeTo(&buf)
+	m.WriteTo(&buf)
 
 	body := base64.RawURLEncoding.EncodeToString(buf.Bytes())
-	// body := base64.URLEncoding.EncodeToString(buf.Bytes())
 
 	var gmailMessage = &gmail.Message{Raw: body}
 
