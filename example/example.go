@@ -116,13 +116,13 @@ func newGoogleMessage(email Email, customHeaders map[string]string, token string
 			return nil, err
 		}
 
-		if err := msg.Attach(attachment.FileName, content); err != nil {
+		if err := msg.Attach(attachment.FileName, content, nil); err != nil {
 			return nil, err
 		}
 	}
 
 	if len(email.Body) > 0 {
-		if err := msg.SetBody([]byte(email.Body)); err != nil {
+		if err := msg.SetBody([]byte(email.Body), nil, gmail.Auto); err != nil {
 			return msg, err
 		}
 	}

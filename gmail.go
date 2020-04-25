@@ -20,6 +20,16 @@ import (
 	"google.golang.org/api/option"
 )
 
+// BodyType - what type of body to set
+type BodyType string
+
+// BodyType values
+const (
+	Auto BodyType = "auto"
+	HTML BodyType = "html"
+	Text BodyType = "text"
+)
+
 // GoogleMessage describes an email message.
 type GoogleMessage struct {
 	Header textproto.MIMEHeader   // headers
@@ -35,49 +45,80 @@ func (m *GoogleMessage) Token() (*oauth2.Token, error) {
 	}, nil
 }
 
-const _body = "\000body" // the file name with the contents of the message
+const _body = "\000body"         // the file name with the contents of the message
+const _bodyTEXT = "\000bodyTEXT" // the file name with the contents of the message
+const _bodyHTML = "\000bodyHTML" // the file name with the contents of the message
 
 // Attach attaches to the message an attachment as a file. Passing an empty
 // content deletes the file with the same name if it was previously added.
-func (m *GoogleMessage) Attach(name string, data []byte) error {
+func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIMEHeader) error {
 	if len(data) == 0 {
 		if m.parts != nil {
 			delete(m.parts, name)
 		}
 		return nil
 	}
+
 	name = filepath.Base(name)
 	switch name {
 	case ".", "..", string(filepath.Separator):
 		return fmt.Errorf("bad file name: %v", name)
 	}
+
 	var h = make(textproto.MIMEHeader)
-	var contentType = mime.TypeByExtension(filepath.Ext(name))
+	if headers != nil {
+		h = *headers
+	}
+
+	var contentType = h.Get("Content-Type")
+
 	if contentType == "" {
-		contentType = http.DetectContentType(data)
-	}
-	if contentType != "" {
-		h.Set("Content-Type", contentType)
-	}
-	var coding = "quoted-printable"
-	if !strings.HasPrefix(contentType, "text") {
-		if name == _body {
-			return fmt.Errorf("unsupported body content type: %v", contentType)
+		if name == _bodyHTML {
+			contentType = "text/html"
+		} else {
+			contentType = mime.TypeByExtension(filepath.Ext(name))
 		}
-		coding = "base64"
+
+		if contentType == "" {
+			contentType = http.DetectContentType(data)
+		}
+
+		if contentType != "" {
+			h.Set("Content-Type", contentType)
+		}
 	}
-	h.Set("Content-Transfer-Encoding", coding)
-	if name != _body {
-		disposition := fmt.Sprintf("attachment; filename=%s", name)
-		h.Set("Content-Disposition", disposition)
+
+	var coding = h.Get("Content-Transfer-Encoding")
+
+	if coding == "" || !((coding == "quoted-printable") || (coding == "base64")) {
+		coding = "quoted-printable"
+		if !strings.HasPrefix(contentType, "text") {
+			if name == _body || name == _bodyHTML || name == _bodyTEXT {
+				return fmt.Errorf("unsupported body content type: %v", contentType)
+			}
+			coding = "base64"
+		}
+
+		h.Set("Content-Transfer-Encoding", coding)
 	}
+
+	if name != _body && name != _bodyHTML && name != _bodyTEXT {
+		disposition := h.Get("Content-Disposition")
+		if disposition == "" {
+			disposition = fmt.Sprintf("attachment; filename=%s", name)
+			h.Set("Content-Disposition", disposition)
+		}
+	}
+
 	if m.parts == nil {
 		m.parts = make(map[string]*googlePart)
 	}
+
 	m.parts[name] = &googlePart{
 		header: h,
 		data:   data,
 	}
+
 	return nil
 }
 
@@ -88,9 +129,22 @@ func (m *GoogleMessage) Attach(name string, data []byte) error {
 // text with <html> tag. When adding the HTML content, text version, to support
 // legacy mail program will be added automatically. When you try to add as
 // message binary data will return an error. You can pass as a parameter the nil,
-// then the message will be without a text submission.
-func (m *GoogleMessage) SetBody(data []byte) error {
-	return m.Attach(_body, data)
+// then the message will be without a text submission. Use bodyType to specify
+// which type of body is being set.  Using Auto only allows one body part.  To have both
+// an html body and a text body, call twice, once for each kind
+func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, bodyType BodyType) error {
+	name := _body
+	switch bodyType {
+	case HTML:
+		name = _bodyHTML
+	case Text:
+		name = _bodyTEXT
+	case Auto:
+		fallthrough
+	default:
+		name = _body
+	}
+	return m.Attach(name, data, headers)
 }
 
 // Has returns true if a file with that name was in the message as an attachment.
@@ -100,13 +154,17 @@ func (m *GoogleMessage) Has(name string) bool {
 }
 
 // WriteTo generates and writes the text representation of mail messages.
-func (m *GoogleMessage) WriteTo(w io.Writer) error {
+func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
+	var numBytes int64
+
 	if len(m.parts) == 0 {
-		return errors.New("contents are undefined")
+		return 0, errors.New("contents are undefined")
 	}
 
 	var headers = make(textproto.MIMEHeader)
-	headers.Set("MIME-Version", "1.0")
+	if m.Header.Get("MIME-Version") == "" {
+		headers.Set("MIME-Version", "1.0")
+	}
 
 	// copy the primary header of the message
 	for k, v := range m.Header {
@@ -124,12 +182,12 @@ func (m *GoogleMessage) WriteTo(w io.Writer) error {
 			}
 		}
 
-		writeEmailHeaders(w, headers)
+		numBytes += int64(writeEmailHeaders(w, headers))
 
-		if err := body.writeGoogleData(w); err != nil {
-			return err
+		if bytesWritten, err := body.writeGoogleData(w); err != nil {
+			return numBytes + int64(bytesWritten), err
 		}
-		return nil
+		return numBytes, nil
 	}
 
 	// there are attached files
@@ -142,14 +200,14 @@ func (m *GoogleMessage) WriteTo(w io.Writer) error {
 	for _, p := range m.parts {
 		pw, err := mw.CreatePart(p.header)
 		if err != nil {
-			return err
+			return numBytes, err
 		}
 
-		if err = p.writeGoogleData(pw); err != nil {
-			return err
+		if bytesWritten, err := p.writeGoogleData(pw); err != nil {
+			return numBytes + int64(bytesWritten), err
 		}
 	}
-	return nil
+	return numBytes, nil
 }
 
 // Send sends the message through GMail.
@@ -198,42 +256,47 @@ type googlePart struct {
 // writeGoogleData writes the contents of the message file with maintain the coding
 // system. At the moment only implemented quoted-printable and base64 encoding.
 // For all others, an error is returned.
-func (p *googlePart) writeGoogleData(w io.Writer) (err error) {
+func (p *googlePart) writeGoogleData(w io.Writer) (numBytes int, err error) {
 	switch name := p.header.Get("Content-Transfer-Encoding"); name {
 	case "quoted-printable":
 		enc := quotedprintable.NewWriter(w)
-		_, err = enc.Write(p.data)
+		numBytes, err = enc.Write(p.data)
 		enc.Close()
 	case "base64":
 		enc := base64.NewEncoder(base64.StdEncoding, w)
-		_, err = enc.Write(p.data)
+		numBytes, err = enc.Write(p.data)
 		enc.Close()
 	default:
 		err = fmt.Errorf("unsupported transform encoding: %v", name)
 	}
-	return err
+	return numBytes, err
 }
 
 // writeEmailHeaders writes the header of the message or file.
-func writeEmailHeaders(w io.Writer, h textproto.MIMEHeader) {
+func writeEmailHeaders(w io.Writer, h textproto.MIMEHeader) (numBytes int) {
 	var keys = make([]string, 0, len(h))
 	for k := range h {
 		keys = append(keys, k)
 	}
 
 	for _, k := range keys {
-		writeHeader(w, k, h[k]...)
+		numBytes += writeHeader(w, k, h[k]...)
 	}
 	fmt.Fprintf(w, "\r\n") // add the offset from the header
+
+	return
 }
 
-func writeHeader(w io.Writer, k string, v ...string) {
-	io.WriteString(w, k)
+func writeHeader(w io.Writer, k string, v ...string) (numBytes int) {
+	bytesWritten, _ := io.WriteString(w, k)
+	numBytes += bytesWritten
 	if len(v) == 0 {
-		io.WriteString(w, ":\r\n")
-		return
+		bytesWritten, _ := io.WriteString(w, ":\r\n")
+		numBytes += bytesWritten
+		return numBytes
 	}
-	io.WriteString(w, ": ")
+	bytesWritten, _ = io.WriteString(w, ": ")
+	numBytes += bytesWritten
 
 	// Max header line length is 78 characters in RFC 5322 and 76 characters
 	// in RFC 2047. So for the sake of simplicity we use the 76 characters
@@ -244,43 +307,55 @@ func writeHeader(w io.Writer, k string, v ...string) {
 		// If the line is already too long, insert a newline right away.
 		if charsLeft < 1 {
 			if i == 0 {
-				io.WriteString(w, "\r\n ")
+				bytesWritten, _ := io.WriteString(w, "\r\n ")
+				numBytes += bytesWritten
 			} else {
-				io.WriteString(w, ",\r\n ")
+				bytesWritten, _ := io.WriteString(w, ",\r\n ")
+				numBytes += bytesWritten
 			}
 			charsLeft = 75
 		} else if i != 0 {
-			io.WriteString(w, ", ")
+			bytesWritten, _ := io.WriteString(w, ", ")
+			numBytes += bytesWritten
 			charsLeft -= 2
 		}
 
 		// While the header content is too long, fold it by inserting a newline.
 		for len(s) > charsLeft {
-			s = writeLine(w, s, charsLeft)
+			bytesWritten, s = writeLine(w, s, charsLeft)
+			numBytes += bytesWritten
 			charsLeft = 75
 		}
-		io.WriteString(w, s)
+		bytesWritten, _ = io.WriteString(w, s)
+		numBytes += bytesWritten
 		if i := strings.LastIndexByte(s, '\n'); i != -1 {
 			charsLeft = 75 - (len(s) - i - 1)
 		} else {
 			charsLeft -= len(s)
 		}
 	}
-	io.WriteString(w, "\r\n")
+	bytesWritten, _ = io.WriteString(w, "\r\n")
+	numBytes += bytesWritten
+	return numBytes
 }
 
-func writeLine(w io.Writer, s string, charsLeft int) string {
+func writeLine(w io.Writer, s string, charsLeft int) (int, string) {
+	var numBytes int
+
 	// If there is already a newline before the limit. Write the line.
 	if i := strings.IndexByte(s, '\n'); i != -1 && i < charsLeft {
-		io.WriteString(w, s[:i+1])
-		return s[i+1:]
+		bytesWritten, _ := io.WriteString(w, s[:i+1])
+		numBytes += bytesWritten
+		return numBytes, s[i+1:]
 	}
 
 	for i := charsLeft - 1; i >= 0; i-- {
 		if s[i] == ' ' {
-			io.WriteString(w, s[:i])
-			io.WriteString(w, "\r\n ")
-			return s[i+1:]
+			bytesWritten, _ := io.WriteString(w, s[:i])
+			numBytes += bytesWritten
+			bytesWritten, _ = io.WriteString(w, "\r\n ")
+			numBytes += bytesWritten
+			return numBytes, s[i+1:]
 		}
 	}
 
@@ -288,17 +363,21 @@ func writeLine(w io.Writer, s string, charsLeft int) string {
 	// even if it is after the limit.
 	for i := 75; i < len(s); i++ {
 		if s[i] == ' ' {
-			io.WriteString(w, s[:i])
-			io.WriteString(w, "\r\n ")
-			return s[i+1:]
+			bytesWritten, _ := io.WriteString(w, s[:i])
+			numBytes += bytesWritten
+			bytesWritten, _ = io.WriteString(w, "\r\n ")
+			numBytes += bytesWritten
+			return numBytes, s[i+1:]
 		}
 		if s[i] == '\n' {
-			io.WriteString(w, s[:i+1])
-			return s[i+1:]
+			bytesWritten, _ := io.WriteString(w, s[:i+1])
+			numBytes += bytesWritten
+			return bytesWritten, s[i+1:]
 		}
 	}
 
 	// Too bad, no space or newline in the whole string. Just write everything.
-	io.WriteString(w, s)
-	return ""
+	bytesWritten, _ := io.WriteString(w, s)
+	numBytes += bytesWritten
+	return numBytes, ""
 }
