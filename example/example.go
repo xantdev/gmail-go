@@ -151,7 +151,7 @@ func main() {
 		panic(err)
 	}
 
-	messageID, err := msg.Send()
+	messageID, err := msg.Send(nil)
 	if err != nil {
 		panic(err)
 	}

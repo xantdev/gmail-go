@@ -211,8 +211,10 @@ func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
 }
 
 // Send sends the message through GMail.
+// Pass in client to over-ride the http.Client used. Otherwise the default will be used
 // Returns the Message-Id header for the sent email
-func (m *GoogleMessage) Send() (string, error) {
+func (m *GoogleMessage) Send(client *http.Client) (string, error) {
+	var err error
 	var buf bytes.Buffer
 	m.WriteTo(&buf)
 
@@ -220,7 +222,13 @@ func (m *GoogleMessage) Send() (string, error) {
 
 	var gmailMessage = &gmail.Message{Raw: body}
 
-	srv, err := gmail.NewService(context.Background(), option.WithTokenSource(m), option.WithUserAgent("XANTDev/gmail-go"))
+	var srv *gmail.Service
+
+	if client != nil {
+		srv, err = gmail.NewService(context.Background(), option.WithTokenSource(m), option.WithUserAgent("XANTDev/gmail-go"), option.WithHTTPClient(client))
+	} else {
+		srv, err = gmail.NewService(context.Background(), option.WithTokenSource(m), option.WithUserAgent("XANTDev/gmail-go"))
+	}
 
 	resp, err := srv.Users.Messages.Send("me", gmailMessage).Do()
 	if err != nil {
@@ -236,7 +244,7 @@ func (m *GoogleMessage) Send() (string, error) {
 	if sentMsg.Payload != nil {
 		if sentMsg.Payload.Headers != nil {
 			for _, v := range sentMsg.Payload.Headers {
-				if v.Name == "Message-Id" {
+				if strings.ToLower(v.Name) == "message-id" {
 					messageID = v.Value
 					break
 				}
