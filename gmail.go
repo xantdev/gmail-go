@@ -122,17 +122,7 @@ func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIME
 	return nil
 }
 
-// SetBody sets the contents of the text of the letter.
-//
-// You can use text or HTML message format (is determined automatically). To
-// guarantee that the format will be specified as HTML, consider wrapping the
-// text with <html> tag. When adding the HTML content, text version, to support
-// legacy mail program will be added automatically. When you try to add as
-// message binary data will return an error. You can pass as a parameter the nil,
-// then the message will be without a text submission. Use bodyType to specify
-// which type of body is being set.  Using Auto only allows one body part.  To have both
-// an html body and a text body, call twice, once for each kind
-func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, bodyType BodyType) error {
+func (m *GoogleMessage) bodyNameByType(bodyType BodyType) string {
 	name := _body
 	switch bodyType {
 	case HTML:
@@ -144,7 +134,33 @@ func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, body
 	default:
 		name = _body
 	}
+
+	return name
+}
+
+// SetBody sets the contents of the text of the letter.
+//
+// You can use text or HTML message format (is determined automatically). To
+// guarantee that the format will be specified as HTML, consider wrapping the
+// text with <html> tag. When adding the HTML content, text version, to support
+// legacy mail program will be added automatically. When you try to add as
+// message binary data will return an error. You can pass as a parameter the nil,
+// then the message will be without a text submission. Use bodyType to specify
+// which type of body is being set.  Using Auto only allows one body part.  To have both
+// an html body and a text body, call twice, once for each kind
+func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, bodyType BodyType) error {
+	name := m.bodyNameByType(bodyType)
 	return m.Attach(name, data, headers)
+}
+
+// GetBody returns a previously set body of type bodyType
+// if no body for bodyType has been set, the an empty byte slice is returned
+func (m *GoogleMessage) GetBody(bodyType BodyType) []byte {
+	name := m.bodyNameByType(bodyType)
+	if m.Has(name) {
+		return m.parts[name].data
+	}
+	return []byte{}
 }
 
 // Has returns true if a file with that name was in the message as an attachment.
