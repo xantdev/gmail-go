@@ -33,7 +33,7 @@ const (
 // GoogleMessage describes an email message.
 type GoogleMessage struct {
 	Header textproto.MIMEHeader   // headers
-	parts  map[string]*googlePart // the list of file by names
+	parts  map[string]*GooglePart // the list of file by names
 
 	AccessToken string
 }
@@ -111,12 +111,12 @@ func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIME
 	}
 
 	if m.parts == nil {
-		m.parts = make(map[string]*googlePart)
+		m.parts = make(map[string]*GooglePart)
 	}
 
-	m.parts[name] = &googlePart{
-		header: h,
-		data:   data,
+	m.parts[name] = &GooglePart{
+		Header: h,
+		Data:   data,
 	}
 
 	return nil
@@ -155,18 +155,29 @@ func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, body
 
 // GetBody returns a previously set body of type bodyType
 // if no body for bodyType has been set, the an empty byte slice is returned
-func (m *GoogleMessage) GetBody(bodyType BodyType) []byte {
+func (m *GoogleMessage) GetBody(bodyType BodyType) (*textproto.MIMEHeader, []byte) {
 	name := m.bodyNameByType(bodyType)
 	if m.Has(name) {
-		return m.parts[name].data
+		return &(m.parts[name].Header), m.parts[name].Data
 	}
-	return []byte{}
+	return nil, []byte{}
 }
 
 // Has returns true if a file with that name was in the message as an attachment.
 func (m *GoogleMessage) Has(name string) bool {
 	_, ok := m.parts[name]
 	return ok
+}
+
+// GetAttachments - returns a list of non-body attachment parts
+func (m *GoogleMessage) GetAttachments() map[string]*GooglePart {
+	parts := map[string]*GooglePart{}
+	for name, part := range m.parts {
+		if name != _body && name != _bodyHTML && name != _bodyTEXT {
+			parts[name] = part
+		}
+	}
+	return parts
 }
 
 // WriteTo generates and writes the text representation of mail messages.
@@ -192,7 +203,7 @@ func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
 	// check that only defined the basic message, no attachments
 	if len(m.parts) == 1 && m.Has(_body) {
 		body := m.parts[_body]
-		for k, v := range body.header {
+		for k, v := range body.Header {
 			for _, v2 := range v {
 				headers.Add(k, v2)
 			}
@@ -214,7 +225,7 @@ func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
 	writeEmailHeaders(w, headers)
 
 	for _, p := range m.parts {
-		pw, err := mw.CreatePart(p.header)
+		pw, err := mw.CreatePart(p.Header)
 		if err != nil {
 			return numBytes, err
 		}
@@ -271,24 +282,24 @@ func (m *GoogleMessage) Send(client *http.Client) (string, error) {
 	return messageID, nil
 }
 
-// googlePart describes googlePart email message: the file or message.
-type googlePart struct {
-	header textproto.MIMEHeader // headers
-	data   []byte               // content
+// GooglePart describes googlePart email message: the file or message.
+type GooglePart struct {
+	Header textproto.MIMEHeader // headers
+	Data   []byte               // content
 }
 
 // writeGoogleData writes the contents of the message file with maintain the coding
 // system. At the moment only implemented quoted-printable and base64 encoding.
 // For all others, an error is returned.
-func (p *googlePart) writeGoogleData(w io.Writer) (numBytes int, err error) {
-	switch name := p.header.Get("Content-Transfer-Encoding"); name {
+func (p *GooglePart) writeGoogleData(w io.Writer) (numBytes int, err error) {
+	switch name := p.Header.Get("Content-Transfer-Encoding"); name {
 	case "quoted-printable":
 		enc := quotedprintable.NewWriter(w)
-		numBytes, err = enc.Write(p.data)
+		numBytes, err = enc.Write(p.Data)
 		enc.Close()
 	case "base64":
 		enc := base64.NewEncoder(base64.StdEncoding, w)
-		numBytes, err = enc.Write(p.data)
+		numBytes, err = enc.Write(p.Data)
 		enc.Close()
 	default:
 		err = fmt.Errorf("unsupported transform encoding: %v", name)
