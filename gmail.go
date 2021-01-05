@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -35,7 +36,8 @@ type GoogleMessage struct {
 	Header textproto.MIMEHeader   // headers
 	parts  map[string]*GooglePart // the list of file by names
 
-	AccessToken string
+	AccessToken        string
+	WriteHeadersSorted bool
 }
 
 // Token - implement TokenSource interface
@@ -209,7 +211,7 @@ func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
 			}
 		}
 
-		numBytes += int64(writeEmailHeaders(w, headers))
+		numBytes += int64(writeEmailHeaders(w, headers, m.WriteHeadersSorted))
 
 		if bytesWritten, err := body.writeGoogleData(w); err != nil {
 			return numBytes + int64(bytesWritten), err
@@ -222,7 +224,7 @@ func (m *GoogleMessage) WriteTo(w io.Writer) (int64, error) {
 	defer mw.Close()
 	headers.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", mw.Boundary()))
 
-	writeEmailHeaders(w, headers)
+	writeEmailHeaders(w, headers, m.WriteHeadersSorted)
 
 	for _, p := range m.parts {
 		pw, err := mw.CreatePart(p.Header)
@@ -308,10 +310,15 @@ func (p *GooglePart) writeGoogleData(w io.Writer) (numBytes int, err error) {
 }
 
 // writeEmailHeaders writes the header of the message or file.
-func writeEmailHeaders(w io.Writer, h textproto.MIMEHeader) (numBytes int) {
+func writeEmailHeaders(w io.Writer, h textproto.MIMEHeader, writeHeadersSorted bool) (numBytes int) {
 	var keys = make([]string, 0, len(h))
 	for k := range h {
 		keys = append(keys, k)
+	}
+
+	if writeHeadersSorted {
+		fmt.Println("sorting headers")
+		sort.Strings(keys)
 	}
 
 	for _, k := range keys {
