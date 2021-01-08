@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -23,6 +24,8 @@ import (
 
 // BodyType - what type of body to set
 type BodyType string
+
+var cidRE *regexp.Regexp
 
 // BodyType values
 const (
@@ -51,9 +54,13 @@ const _body = "\000body"         // the file name with the contents of the messa
 const _bodyTEXT = "\000bodyTEXT" // the file name with the contents of the message
 const _bodyHTML = "\000bodyHTML" // the file name with the contents of the message
 
+func init() {
+	cidRE = regexp.MustCompile(`(?m)^<.*>$`)
+}
+
 // Attach attaches to the message an attachment as a file. Passing an empty
 // content deletes the file with the same name if it was previously added.
-func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIMEHeader) error {
+func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIMEHeader, inlineCID string) error {
 	if len(data) == 0 {
 		if m.parts != nil {
 			delete(m.parts, name)
@@ -107,9 +114,18 @@ func (m *GoogleMessage) Attach(name string, data []byte, headers *textproto.MIME
 	if name != _body && name != _bodyHTML && name != _bodyTEXT {
 		disposition := h.Get("Content-Disposition")
 		if disposition == "" {
-			disposition = fmt.Sprintf("attachment; filename=%s", name)
+			if inlineCID != "" {
+				if cidRE.MatchString(inlineCID) == false {
+					inlineCID = fmt.Sprintf("<%s>", inlineCID)
+				}
+				disposition = fmt.Sprintf("inline; filename=%s", name)
+				h.Set("Content-ID", inlineCID)
+			} else {
+				disposition = fmt.Sprintf("attachment; filename=%s", name)
+			}
 			h.Set("Content-Disposition", disposition)
 		}
+
 	}
 
 	if m.parts == nil {
@@ -152,7 +168,7 @@ func (m *GoogleMessage) bodyNameByType(bodyType BodyType) string {
 // an html body and a text body, call twice, once for each kind
 func (m *GoogleMessage) SetBody(data []byte, headers *textproto.MIMEHeader, bodyType BodyType) error {
 	name := m.bodyNameByType(bodyType)
-	return m.Attach(name, data, headers)
+	return m.Attach(name, data, headers, "")
 }
 
 // GetBody returns a previously set body of type bodyType
